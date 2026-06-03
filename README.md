@@ -1,49 +1,49 @@
-# KlineDataPipeline — 分布式加密货币 K 线数据管道
+# KlineDataPipeline — Distributed Crypto K-Line Data Pipeline
 
-> 一个基于 **Spring Boot + Kafka + PostgreSQL** 的加密货币 K 线（OHLCV）数据采集、传输、存储与查询系统，部署在 **AWS（3×EC2 + RDS）**。
-> 同时支持**历史回补（Backfill）**与**实时接入（Realtime）**两条数据流，通过 Kafka 双 Topic 解耦，并演示了 **Kafka 多 Consumer Group 扇出**（多团队独立消费同一份数据）。
-
----
-
-## ✨ 核心特性
-
-| 特性 | 说明 |
-|------|------|
-| 🔄 **双数据流** | Backfill（REST 拉历史）+ Realtime（WebSocket 接实时），UPSERT 自动去重 |
-| 🚦 **双 Topic 隔离** | `kline-backfill`（吞吐型）+ `kline-realtime`（延迟型），互不干扰 |
-| 🧵 **双 Listener** | Consumer 两个独立线程，realtime 低延迟 / backfill 高吞吐，各自调优 |
-| 🔁 **幂等写入** | `INSERT ON CONFLICT DO NOTHING`，重投/重叠零重复 |
-| 🩹 **缺口自动补偿** | 查询时检测数据缺口 → 自动 backfill 补齐 → 再返回完整结果 |
-| 📡 **多团队扇出** | 风控监控团队用独立 Consumer Group 消费同一份数据，零改动现有服务 |
-| ⚡ **性能优化** | 端到端 1 个月数据 11s → 3s（详见 [性能优化](#-性能优化实测)）|
-| 🛡️ **systemd 守护** | 3 个服务进程化，崩溃自启，密码隔离到 env 文件 |
+> A crypto K-line (OHLCV) ingestion, streaming, storage, and query system built with **Spring Boot + Kafka + PostgreSQL**, deployed on **AWS (3×EC2 + RDS)**.
+> It supports two coordinated data flows — **historical backfill** and **realtime streaming** — decoupled via dual Kafka topics, and demonstrates **Kafka multi-consumer-group fan-out** (multiple teams independently consuming the same data).
 
 ---
 
-## 🏗️ 系统架构
+## ✨ Key Features
+
+| Feature | Description |
+|---------|-------------|
+| 🔄 **Dual Data Flows** | Backfill (REST historical) + Realtime (WebSocket live), deduplicated via UPSERT |
+| 🚦 **Dual-Topic Isolation** | `kline-backfill` (throughput) + `kline-realtime` (latency), fully isolated |
+| 🧵 **Dual Listeners** | Two independent consumer threads — realtime low-latency / backfill high-throughput, each tuned |
+| 🔁 **Idempotent Writes** | `INSERT ON CONFLICT DO NOTHING` — zero duplicates on redelivery/overlap |
+| 🩹 **Auto Gap Compensation** | Query detects data gaps → auto-triggers backfill → returns complete results |
+| 📡 **Multi-Team Fan-out** | A risk-monitoring team consumes the same stream via an independent consumer group, with zero changes to existing services |
+| ⚡ **Performance** | End-to-end for one month of data: 11s → 3s (see [Performance](#-performance-measured)) |
+| 🛡️ **systemd Daemons** | All 3 services run as daemons with auto-restart and secrets isolated to env files |
+
+---
+
+## 🏗️ System Architecture
 
 ```mermaid
 flowchart TB
     subgraph Binance["🪙 Binance.US"]
-        REST["REST API<br/>(历史 K 线)"]
-        WS["WebSocket<br/>(实时 K 线流)"]
+        REST["REST API<br/>(historical klines)"]
+        WS["WebSocket<br/>(realtime kline stream)"]
     end
 
     subgraph EC2_1["🖥️ EC2-1 Producer (systemd)"]
-        BF["Backfill Producer<br/>并行 fetch (20线程池)"]
-        RT["Realtime Producer<br/>过滤收盘 K 线 x=true"]
-        QRY["Query API<br/>/klineAggregate<br/>缺口检测+补偿"]
+        BF["Backfill Producer<br/>parallel fetch (20-thread pool)"]
+        RT["Realtime Producer<br/>filter closed klines x=true"]
+        QRY["Query API<br/>/klineAggregate<br/>gap detection + compensation"]
     end
 
     subgraph EC2_2["🖥️ EC2-2 Kafka (Docker)"]
-        TB["Topic: kline-backfill<br/>(高吞吐)"]
-        TR["Topic: kline-realtime<br/>(低延迟)"]
+        TB["Topic: kline-backfill<br/>(high throughput)"]
+        TR["Topic: kline-realtime<br/>(low latency)"]
     end
 
     subgraph EC2_3["🖥️ EC2-3 Consumers (systemd)"]
         CB["Listener: backfillFactory<br/>max.poll=4000"]
-        CR["Listener: realtimeFactory<br/>fetch.min=1, 低延迟"]
-        MON["KlineMonitor<br/>风控团队<br/>独立 Consumer Group"]
+        CR["Listener: realtimeFactory<br/>fetch.min=1, low latency"]
+        MON["KlineMonitor<br/>Risk Team<br/>independent consumer group"]
     end
 
     DB[("🗄️ RDS PostgreSQL<br/>table: kline")]
@@ -57,13 +57,13 @@ flowchart TB
     TR --> MON
     CB -->|COPY + UPSERT| DB
     CR -->|COPY + UPSERT| DB
-    MON -.->|不写库<br/>RISK ALERT| ALERT["⚠️ 价格异常告警"]
-    QRY <-->|读 + 缺口补偿| DB
+    MON -.->|no DB write<br/>RISK ALERT| ALERT["⚠️ price anomaly alert"]
+    QRY <-->|read + gap fill| DB
 ```
 
 ---
 
-## 🔀 数据流：一根 K 线的旅程
+## 🔀 Data Flow: The Journey of One K-Line
 
 ```mermaid
 sequenceDiagram
@@ -73,139 +73,139 @@ sequenceDiagram
     participant C as Consumer (EC2-3)
     participant D as RDS
 
-    Note over B,D: 实时流（每分钟每 symbol 一根收盘 K 线）
-    B->>P: WebSocket 推送 kline (x=true)
+    Note over B,D: Realtime stream (one closed kline per symbol per minute)
+    B->>P: WebSocket pushes kline (x=true)
     P->>K: send(kline-realtime, key=symbol)
-    K->>C: realtimeFactory listener 拉取
+    K->>C: realtimeFactory listener polls
     C->>D: COPY → INSERT ON CONFLICT DO NOTHING
 
-    Note over B,D: 历史回补（一次几万条）
-    P->>B: 并行 REST fetch (45 次)
-    P->>K: 异步批量 send(kline-backfill)
-    K->>C: backfillFactory listener 攒批
-    C->>D: COPY 4000 行/批
+    Note over B,D: Historical backfill (tens of thousands at once)
+    P->>B: parallel REST fetch (45 calls)
+    P->>K: async batch send(kline-backfill)
+    K->>C: backfillFactory listener batches
+    C->>D: COPY 4000 rows/batch
 ```
 
 ---
 
-## 📦 项目结构
+## 📦 Project Structure
 
 ```
 KlineDataPipeline/
-├── KlineLoaderProject/        # Producer：Backfill + Realtime + Query
+├── KlineLoaderProject/        # Producer: Backfill + Realtime + Query
 │   └── src/main/java/com/example/demo/
-│       ├── controller/        # KlineLoadController(写) / KlineAggregateController(查)
+│       ├── controller/        # KlineLoadController(write) / KlineAggregateController(query)
 │       ├── service/
-│       │   ├── LoadService            # 并行 fetch 编排
-│       │   ├── BinanceAPIService      # REST 调用 + 并行解析
-│       │   ├── BinanceRealtimeProducer# ⭐ WebSocket 实时订阅 + 重连
-│       │   ├── KlineProducer          # ⭐ 双 topic 发送
-│       │   ├── KlineAggregateService  # ⭐ 聚合 + 缺口自动补偿
-│       │   └── ValidationService      # symbol 白名单校验
-│       ├── repo/KlineMapper           # MyBatis（查询 ORDER BY）
-│       └── config/LogAspect           # AOP 日志
+│       │   ├── LoadService            # parallel fetch orchestration
+│       │   ├── BinanceAPIService      # REST calls + parallel parsing
+│       │   ├── BinanceRealtimeProducer# ⭐ WebSocket realtime subscribe + reconnect
+│       │   ├── KlineProducer          # ⭐ dual-topic sending
+│       │   ├── KlineAggregateService  # ⭐ aggregation + auto gap compensation
+│       │   └── ValidationService      # symbol whitelist validation
+│       ├── repo/KlineMapper           # MyBatis (query with ORDER BY)
+│       └── config/LogAspect           # AOP logging
 │
-├── KlineConsumerProject/      # Consumer：写库
+├── KlineConsumerProject/      # Consumer: write to DB
 │   └── src/main/java/com/example/consumer/
-│       ├── config/KafkaConfig         # ⭐ 双 Factory（延迟型/吞吐型）
-│       ├── service/KlineConsumer      # ⭐ 双 Listener
+│       ├── config/KafkaConfig         # ⭐ dual factories (latency / throughput)
+│       ├── service/KlineConsumer      # ⭐ dual listeners
 │       └── repo/
-│           ├── KlineCopyWriter        # ⭐ PostgreSQL COPY 写入
+│           ├── KlineCopyWriter        # ⭐ PostgreSQL COPY writer
 │           └── KlineMapper            # batchInsert + UPSERT
 │
-├── KlineMonitorProject/       # ⭐ 风控监控团队（独立 Consumer Group）
+├── KlineMonitorProject/       # ⭐ Risk-monitoring team (independent consumer group)
 │   └── src/main/java/com/example/monitor/
-│       └── service/KlineMonitor       # 实时价格异常检测，不写库
+│       └── service/KlineMonitor       # realtime price anomaly detection, no DB write
 │
-├── deploy/                    # systemd service 文件 ×3
-├── PROJECT_SNAPSHOT.md        # 完整架构文档（含 AWS 基础设施清单）
-└── EXPERIMENTS.md             # 性能实验报告（5 个实验 + 数据）
+├── deploy/                    # systemd service files ×3
+├── PROJECT_SNAPSHOT.md        # full architecture doc (incl. AWS infra inventory)
+└── EXPERIMENTS.md             # performance experiment report (5 experiments + data)
 ```
 
 ---
 
-## ⚡ 性能优化（实测）
+## ⚡ Performance (Measured)
 
-> 测试数据集：BTCUSDT 1 个月 1 分钟 K 线 = **44,640 条**（Binance 单次上限 1000，需 45 次调用）
+> Test dataset: BTCUSDT one month of 1-minute klines = **44,640 records** (Binance caps each call at 1000, requiring 45 calls)
 
-| 阶段 | 优化前 | 优化后 | 手段 |
-|------|--------|--------|------|
-| Binance fetch | 1736ms | **315ms** | 串行 → 自定义 20 线程池（**5.5x**）|
-| Kafka 发送 | 1700ms | **300ms** | 串行 → `CompletableFuture` 异步并行（**5x**）|
-| Consumer 写库 | 5000ms | **2000ms** | INSERT → PostgreSQL **COPY**（**2.5x**）|
-| flush 等待 | 5000ms | **0ms** | scheduler → Batch Listener 自然攒批 |
-| **端到端** | **~11s** | **~3s** | — |
+| Stage | Before | After | Technique |
+|-------|--------|-------|-----------|
+| Binance fetch | 1736ms | **315ms** | Serial → custom 20-thread pool (**5.5x**) |
+| Kafka send | 1700ms | **300ms** | Serial → `CompletableFuture` async (**5x**) |
+| Consumer write | 5000ms | **2000ms** | INSERT → PostgreSQL **COPY** (**2.5x**) |
+| flush wait | 5000ms | **0ms** | scheduler → batch listener natural batching |
+| **End-to-end** | **~11s** | **~3s** | — |
 
-### 关键洞察
+### Key Insights
 
 ```mermaid
 flowchart LR
-    A["fetch 慢?"] -->|"I/O 密集"| B["用线程池<br/>不是并行流"]
-    C["写库慢?"] -->|"profiling 定位"| D["瓶颈是 DB<br/>不是 Kafka 参数"]
+    A["fetch slow?"] -->|"I/O-bound"| B["use thread pool<br/>NOT parallel stream"]
+    C["write slow?"] -->|"profiling"| D["bottleneck is DB<br/>not Kafka tuning"]
     D --> E["INSERT→COPY<br/>2.5x"]
 ```
 
-- **并行流陷阱**：`IntStream.parallel()` 按 CPU 核数定并行度，在 1 vCPU 上退化为串行；而 fetch 是 I/O 密集（90% 时间等网络），应该用线程池开 20 个线程。
-- **找对瓶颈**：扫描 `max.poll.records`（250→7000）只换来 21% 提升 → 真瓶颈是 RDS 写入能力。改用 COPY 才是正解（2.5x）。
-- **COPY 保幂等**：COPY 不支持 `ON CONFLICT`，所以先 COPY 到临时表，再 `INSERT...SELECT...ON CONFLICT` 转入主表。
+- **Parallel stream trap**: `IntStream.parallel()` sizes its parallelism to CPU cores, degrading to serial on a single vCPU; but fetch is I/O-bound (90% of time waiting on the network), so a thread pool with 20 threads is the right tool.
+- **Find the real bottleneck**: sweeping `max.poll.records` (250→7000) yielded only a 21% gain → the real bottleneck was RDS write throughput. Switching to COPY was the actual fix (2.5x).
+- **COPY preserves idempotency**: COPY doesn't support `ON CONFLICT`, so we COPY into a staging table, then `INSERT...SELECT...ON CONFLICT` into the main table.
 
-详见 [EXPERIMENTS.md](./EXPERIMENTS.md)。
+See [EXPERIMENTS.md](./EXPERIMENTS.md).
 
 ---
 
-## 🩹 查询缺口自动补偿（亮点设计）
+## 🩹 Query-Time Gap Compensation (Design Highlight)
 
 ```mermaid
 flowchart TD
-    Q["GET /klineAggregate"] --> R["读 RDS"]
-    R --> CHK{"检测缺口?"}
-    CHK -->|无缺口| AGG["聚合返回"]
-    CHK -->|有缺口| BF["触发 backfill 补缺段"]
-    BF --> WAIT["轮询 DB 直到补齐 ≤15s"]
-    WAIT --> RE["重新读"]
+    Q["GET /klineAggregate"] --> R["read RDS"]
+    R --> CHK{"gap detected?"}
+    CHK -->|no gap| AGG["aggregate & return"]
+    CHK -->|gap found| BF["trigger backfill for missing range"]
+    BF --> WAIT["poll DB until complete ≤15s"]
+    WAIT --> RE["re-read"]
     RE --> AGG
 ```
 
-如果 realtime 漏采了某些分钟，查询时自动触发 backfill 补齐，**永不返回带缺口的错误聚合**。实测删除中间一条数据后查询，**1.8 秒自动补回**。
+If realtime missed some minutes, the query automatically triggers a backfill to fill the gap, so it **never returns an incomplete/incorrect aggregation**. Measured: after deleting a middle record, the query **auto-restored it within 1.8s**.
 
 ---
 
-## 📡 Kafka 多 Consumer Group 扇出
+## 📡 Kafka Multi-Consumer-Group Fan-out
 
-一份 `kline-realtime` 数据，被两个独立 Consumer Group 消费，各自维护 offset，互不影响：
+A single `kline-realtime` stream is consumed by two independent consumer groups, each maintaining its own offset without interfering:
 
 ```mermaid
 flowchart LR
-    T["kline-realtime<br/>(offset 234)"] --> G1["db-writer-group-realtime<br/>(存储团队) → 写 RDS"]
-    T --> G2["kline-monitor-group<br/>(风控团队) → RISK ALERT"]
+    T["kline-realtime<br/>(offset 234)"] --> G1["db-writer-group-realtime<br/>(storage team) → write RDS"]
+    T --> G2["kline-monitor-group<br/>(risk team) → RISK ALERT"]
 ```
 
-**加监控团队零改动现有写库服务** —— 这是 Kafka 相比共享数据库 / HTTP 推送的核心优势：生产者不知道也不关心有哪些消费者。
+**Adding the monitoring team required zero changes to the existing DB-writer service** — this is Kafka's core advantage over a shared database or HTTP push: the producer neither knows nor cares which consumers exist.
 
-实测风控告警输出：
+Measured risk-alert output:
 ```
-SOLUSDT ⚠️ RISK ALERT（1 分钟波动超 0.1% 阈值）
+SOLUSDT ⚠️ RISK ALERT (1-min move exceeds 0.1% threshold)
 BTCUSDT ok (0.068%) / ETHUSDT ok (0.079%)
 ```
 
 ---
 
-## 🛠️ 技术栈
+## 🛠️ Tech Stack
 
 `Java 17` · `Spring Boot 3.5` · `Spring Kafka` · `Spring WebSocket` · `MyBatis` · `PostgreSQL` · `Apache Kafka` · `Docker` · `AWS (EC2 / RDS)` · `systemd`
 
 ---
 
-## 🚀 部署
+## 🚀 Deployment
 
-### AWS 基础设施
-- **EC2-1**（Producer）：Java + Maven，跑 backfill + realtime + query
-- **EC2-2**（Kafka）：Docker 跑 Kafka + Zookeeper
-- **EC2-3**（Consumer）：Java，跑写库 Consumer + 监控 Consumer
-- **RDS**：PostgreSQL（db.t3.micro，免费层）
-- **Security Group**：最小权限（SSH→My IP，Kafka/RDS 端口只对内部 SG 开放）
+### AWS Infrastructure
+- **EC2-1** (Producer): Java + Maven — runs backfill + realtime + query
+- **EC2-2** (Kafka): Docker — runs Kafka + Zookeeper
+- **EC2-3** (Consumer): Java — runs DB-writer consumer + monitoring consumer
+- **RDS**: PostgreSQL (db.t3.micro, free tier)
+- **Security Groups**: least-privilege (SSH → My IP; Kafka/RDS ports open only to internal SGs)
 
-### 启动（systemd）
+### Start (systemd)
 ```bash
 # EC2-1
 sudo systemctl start kline-producer
@@ -216,7 +216,7 @@ sudo systemctl start kline-monitor
 cd ~/kafka && docker-compose up -d
 ```
 
-### 表结构
+### Schema
 ```sql
 CREATE TABLE kline (
     symbol      VARCHAR(20)      NOT NULL,
@@ -235,40 +235,40 @@ CREATE TABLE kline (
 
 ## 📡 API
 
-| 接口 | 方法 | 说明 |
-|------|------|------|
-| `/klineloader` | POST | 触发 backfill。参数：`symbol, startTime, endTime, limit, mode(serial/parallel/pool)` |
-| `/klineAggregate` | GET | 多周期聚合查询。参数：`symbol, interval(5m/1h/1d), startTime, endTime`，自动补缺口 |
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/klineloader` | POST | Trigger backfill. Params: `symbol, startTime, endTime, limit, mode(serial/parallel/pool)` |
+| `/klineAggregate` | GET | Multi-interval aggregation query. Params: `symbol, interval(5m/1h/1d), startTime, endTime` — auto-fills gaps |
 
 ---
 
-## ✅ 数据正确性（全部实测验证）
+## ✅ Data Correctness (All Measured & Verified)
 
-| 验证 | 结果 |
-|------|------|
-| realtime + backfill 重叠 | 0 重复行（UPSERT skipped）|
-| 时间连续性 | 0 缺口（相邻 = 60000ms）|
-| OHLCV 合理性 | 0 异常（high≥low, close∈[low,high]）|
-| volume 体积守恒 | 各 interval 聚合总量一致 |
-| 缺口补偿 | 删 1 条 → 1.8s 自动补回 |
-| 多 group 独立消费 | monitor / writer 各自 offset |
-
----
-
-## 📚 文档
-
-- [PROJECT_SNAPSHOT.md](./PROJECT_SNAPSHOT.md) — 完整架构、AWS 清单、配置、部署细节
-- [EXPERIMENTS.md](./EXPERIMENTS.md) — 5 个性能实验的数据与结论
+| Check | Result |
+|-------|--------|
+| realtime + backfill overlap | 0 duplicate rows (UPSERT skipped) |
+| time continuity | 0 gaps (adjacent = 60000ms) |
+| OHLCV sanity | 0 anomalies (high≥low, close∈[low,high]) |
+| volume conservation | aggregated total consistent across all intervals |
+| gap compensation | delete 1 record → auto-restored in 1.8s |
+| independent group consumption | monitor / writer each track their own offset |
 
 ---
 
-## 📈 后续可优化方向
+## 📚 Documentation
 
-- Kafka RF=1→3 + 多 partition（消除单点故障 + 水平扩展）
-- 查询接口改 202 异步返回 + gap-fill 异步化（避免阻塞线程）
-- 集成测试（Testcontainers）、CI/CD（GitHub Actions）
-- 密码迁移到 AWS Secrets Manager
+- [PROJECT_SNAPSHOT.md](./PROJECT_SNAPSHOT.md) — full architecture, AWS inventory, configs, deployment details
+- [EXPERIMENTS.md](./EXPERIMENTS.md) — data and conclusions of 5 performance experiments
 
 ---
 
-*本项目用于学习分布式数据管道设计，演示了生产者/消费者解耦、双流协作、故障隔离、性能优化与多团队数据扇出等工程实践。*
+## 📈 Future Improvements
+
+- Kafka RF=1→3 + multiple partitions (eliminate single point of failure + horizontal scaling)
+- Make query endpoint return 202 async + make gap-fill non-blocking (avoid blocking request threads)
+- Integration tests (Testcontainers), CI/CD (GitHub Actions)
+- Migrate secrets to AWS Secrets Manager
+
+---
+
+*This project is for learning distributed data pipeline design, demonstrating producer/consumer decoupling, dual-stream coordination, fault isolation, performance optimization, and multi-team data fan-out.*
