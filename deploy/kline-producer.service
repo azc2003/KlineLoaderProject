@@ -1,0 +1,15 @@
+[Unit]
+Description=Kline Producer (Backfill + Realtime)
+After=network.target
+
+[Service]
+User=ec2-user
+EnvironmentFile=/etc/kline-producer.env
+ExecStart=/usr/bin/java -Xmx256m -jar /home/ec2-user/KlineLoaderProject/target/demo-0.0.1-SNAPSHOT.jar --spring.datasource.password=${DB_PASSWORD}
+Restart=always
+RestartSec=5
+StandardOutput=append:/home/ec2-user/producer.log
+StandardError=append:/home/ec2-user/producer.log
+
+[Install]
+WantedBy=multi-user.target

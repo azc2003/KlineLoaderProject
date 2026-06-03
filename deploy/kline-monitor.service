@@ -1,0 +1,14 @@
+[Unit]
+Description=Kline Monitor (Risk Team - independent consumer group)
+After=network.target
+
+[Service]
+User=ec2-user
+ExecStart=/usr/bin/java -Xmx200m -jar /home/ec2-user/KlineMonitorProject/target/kline-monitor-0.0.1-SNAPSHOT.jar
+Restart=always
+RestartSec=5
+StandardOutput=append:/home/ec2-user/monitor.log
+StandardError=append:/home/ec2-user/monitor.log
+
+[Install]
+WantedBy=multi-user.target

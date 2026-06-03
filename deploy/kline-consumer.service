@@ -1,0 +1,15 @@
+[Unit]
+Description=Kline Consumer (DB Writer, dual-topic, COPY)
+After=network.target
+
+[Service]
+User=ec2-user
+EnvironmentFile=/etc/kline-consumer.env
+ExecStart=/usr/bin/java -Xmx256m -jar /home/ec2-user/KlineConsumerProject/target/kline-consumer-0.0.1-SNAPSHOT.jar --spring.datasource.password=${DB_PASSWORD} --spring.kafka.consumer.group-id=kline-db-writer-group --kafka.max-poll-records=4000 --kafka.write-mode=copy
+Restart=always
+RestartSec=5
+StandardOutput=append:/home/ec2-user/consumer.log
+StandardError=append:/home/ec2-user/consumer.log
+
+[Install]
+WantedBy=multi-user.target
